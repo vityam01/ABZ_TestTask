@@ -105,19 +105,42 @@ enum HTTPHeader {
 
 
 //MARK: APIError
-enum APIError: Error, LocalizedError {
-    case invalidURL
+enum APIError: Error {
+    case serverError(String, HTTPURLResponse?)
     case decodingError
-    case serverError(String)
+    case invalidURL
+    case networkError(Error)
     
-    var errorDescription: String? {
+    var httpResponse: HTTPURLResponse? {
         switch self {
-        case .invalidURL:
-            return "The URL is invalid."
-        case .decodingError:
-            return "Failed to decode the response."
-        case .serverError(let message):
+        case .serverError(_, let response):
+            return response
+        default:
+            return nil
+        }
+    }
+    
+    var serverMessage: String? {
+        switch self {
+        case .serverError(let message, _):
             return message
+        default:
+            return nil
+        }
+    }
+    
+    var validationErrors: [String]? {
+        switch self {
+        case .serverError(let message, _):
+            // Attempt to parse the message as JSON if it's a structured error response.
+            if let data = message.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let fails = json["fails"] as? [String: [String]] {
+                return fails.flatMap { $0.value }
+            }
+            return nil
+        default:
+            return nil
         }
     }
 }

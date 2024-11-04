@@ -203,7 +203,7 @@ struct SignUpView: View {
                 ReusableScreen(
                     viewModel: ReusableScreenViewModel(
                         image: Image(APPImage.alreadyRegistered),
-                        mainText: viewModel.failureMessage.isEmpty ? "That email is already registered" : viewModel.failureMessage,
+                        mainText: viewModel.failureMessage.isEmpty ? "An error occurred" : viewModel.failureMessage,
                         buttonText: "Try again",
                         buttonAction: {
                             viewModel.showFailureScreen = false
@@ -217,6 +217,7 @@ struct SignUpView: View {
                     EmptyView()
                 }
             }
+            
         }
         .onAppear {
             viewModel.fetchTokenOnAppear()
@@ -248,6 +249,10 @@ struct SignUpView: View {
         }
         .onChange(of: networkManager.isConnected) { isConnected in
             showNoConnectionScreen = !isConnected
+            
+        }
+        .onChange(of: viewModel.showFailureScreen) { newValue in
+            print("showFailureScreen changed to: \(newValue)")
         }
     }
 }

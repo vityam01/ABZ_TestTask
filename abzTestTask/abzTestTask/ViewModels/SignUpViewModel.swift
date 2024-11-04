@@ -139,16 +139,64 @@ class SignUpViewModel: ObservableObject {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.isLoading = false
+                
                 switch result {
-                case .success:
+                case .success(let response):
                     self.showSuccessScreen = true
+                    self.failureMessage = "User successfully registered."
+
                 case .failure(let error):
-                    self.failureMessage = error.localizedDescription
-                    self.showFailureScreen = true
+                    if let httpResponse = error.httpResponse {
+                        switch httpResponse.statusCode {
+                        case 201:
+                            self.showSuccessScreen = true
+                            self.failureMessage = "User successfully registered."
+                            
+                        case 401:
+                            if let message = error.serverMessage {
+                                self.failureMessage = message
+                            } else {
+                                self.failureMessage = "The token expired. Please log in again."
+                            }
+                            self.showFailureScreen = true
+                            
+                        case 409:
+                            if let message = error.serverMessage {
+                                self.failureMessage = message
+                            } else {
+                                self.failureMessage = "User with this phone or email already exists."
+                            }
+                            self.showFailureScreen = true
+                            
+                        case 422:
+                            if let validationErrors = error.validationErrors {
+                                self.failureMessage = validationErrors.joined(separator: "\n")
+                            } else {
+                                self.failureMessage = "Validation failed. Please check your input."
+                            }
+                            self.showFailureScreen = true
+                            
+                        default:
+                            if let message = error.serverMessage {
+                                self.failureMessage = message
+                            } else {
+                                self.failureMessage = "An unexpected error occurred (Status Code: \(httpResponse.statusCode))."
+                            }
+                            self.showFailureScreen = true
+                        }
+                    } else {
+                        if let message = error.serverMessage {
+                            self.failureMessage = message
+                        } else {
+                            self.failureMessage = "An unknown error occurred. Please try again."
+                        }
+                        self.showFailureScreen = true
+                    }
                 }
             }
         }
     }
+
 }
 
 

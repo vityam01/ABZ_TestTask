@@ -46,12 +46,27 @@ extension APIManager {
 
         URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error {
-                completion(.failure(.serverError(error.localizedDescription)))
+                let httpResponse = response as? HTTPURLResponse
+                completion(.failure(.serverError(error.localizedDescription, httpResponse)))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(.serverError("No HTTP response received.", nil)))
+                return
+            }
+
+            guard (200...299).contains(httpResponse.statusCode) else {
+                if let data = data, let errorMessage = String(data: data, encoding: .utf8) {
+                    completion(.failure(.serverError(errorMessage, httpResponse)))
+                } else {
+                    completion(.failure(.serverError("Unexpected server response.", httpResponse)))
+                }
                 return
             }
 
             guard let data = data else {
-                completion(.failure(.serverError("No data received.")))
+                completion(.failure(.serverError("No data received.", httpResponse)))
                 return
             }
 

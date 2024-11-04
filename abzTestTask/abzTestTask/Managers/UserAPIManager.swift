@@ -58,15 +58,26 @@ class UserAPIManager: APIManager {
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            
-            if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-                return .failure(.serverError("Server returned status code \(httpResponse.statusCode)"))
+            if let httpResponse = response as? HTTPURLResponse {
+                switch httpResponse.statusCode {
+                case 200...299:
+                    let decodedResponse = try JSONDecoder().decode(UserListResponse.self, from: data)
+                    return .success(decodedResponse)
+                case 409:
+                    let errorMessage = parseErrorMessage(from: data) ?? "User with this phone or email already exists"
+                    return .failure(.serverError(errorMessage, httpResponse))
+                case 422:
+                    let errorMessage = parseValidationErrors(from: data) ?? "Validation error"
+                    return .failure(.serverError(errorMessage, httpResponse))
+                default:
+                    let generalMessage = parseErrorMessage(from: data) ?? "Unexpected error"
+                    return .failure(.serverError("Server returned status code \(httpResponse.statusCode): \(generalMessage)", httpResponse))
+                }
+            } else {
+                return .failure(.serverError("Invalid response received.", nil))
             }
-
-            let decodedResponse = try JSONDecoder().decode(UserListResponse.self, from: data)
-            return .success(decodedResponse)
         } catch {
-            return .failure(.serverError(error.localizedDescription))
+            return .failure(.serverError("Failed to decode response: \(error.localizedDescription)", nil))
         }
     }
 
@@ -87,10 +98,27 @@ class UserAPIManager: APIManager {
             }
         }
     }
-    
-    
 
-    // MARK: Register User
+    // Helper to parse error messages from JSON
+    private func parseErrorMessage(from data: Data) -> String? {
+        if let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+           let message = json["message"] as? String {
+            return message
+        }
+        return nil
+    }
+
+    // Helper to parse detailed validation errors
+    private func parseValidationErrors(from data: Data) -> String? {
+        if let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+           let fails = json["fails"] as? [String: [String]] {
+            let errorMessages = fails.flatMap { $0.value }
+            return errorMessages.joined(separator: ", ")
+        }
+        return nil
+    }
+
+    // MARK: - Register User
     func registerUser(
         name: String,
         email: String,
@@ -113,82 +141,73 @@ class UserAPIManager: APIManager {
         headers.forEach { header in
             let (field, value) = header.keyValue
             request.setValue(value, forHTTPHeaderField: field)
-            print("Header set: \(field): \(value)")
         }
         
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        print("Content-Type set with boundary: \(boundary)")
         
         var body = Data()
         
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"name\"\r\n\r\n\(name)\r\n".data(using: .utf8)!)
-        print("Appended name: \(name)")
         
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"email\"\r\n\r\n\(email)\r\n".data(using: .utf8)!)
-        print("Appended email: \(email)")
         
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"phone\"\r\n\r\n\(phone)\r\n".data(using: .utf8)!)
-        print("Appended phone: \(phone)")
         
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"position_id\"\r\n\r\n\(positionId)\r\n".data(using: .utf8)!)
-        print("Appended position_id: \(positionId)")
         
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"photo\"; filename=\"photo.jpg\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
         body.append(photoData)
         body.append("\r\n".data(using: .utf8)!)
-        print("Appended photo data")
         
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         
         request.httpBody = body
-        print("HTTP body prepared")
-        
-        print("Sending POST request to: \(request.url?.absoluteString ?? "URL not set")")
-        print("HTTP method: \(request.httpMethod ?? "Method not set")")
         
         URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error {
-                print("Post request error - \(error)")
-                completion(.failure(.serverError(error.localizedDescription)))
+                if let httpResponse = response as? HTTPURLResponse {
+                    completion(.failure(.serverError(error.localizedDescription, httpResponse)))
+                } else {
+                    completion(.failure(.serverError(error.localizedDescription, nil)))
+                }
                 return
             }
             
             guard let data = data else {
-                print("Error: No data received")
-                completion(.failure(.serverError(error?.localizedDescription ?? "No data received.")))
+                if let httpResponse = response as? HTTPURLResponse {
+                    completion(.failure(.serverError("No data received.", httpResponse)))
+                } else {
+                    completion(.failure(.serverError("No data received.", nil)))
+                }
                 return
             }
             
             if let httpResponse = response as? HTTPURLResponse {
-                print("Response status code: \(httpResponse.statusCode)")
-            }
-            print("Data received: \(String(data: data, encoding: .utf8) ?? "Invalid data")")
-            
-            do {
-                let jsonResponse = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
-                print("JSON response: \(jsonResponse ?? [:])")
-                
-                if let success = jsonResponse?["success"] as? Bool, success {
-                    if let userId = jsonResponse?["user_id"] as? Int {
+                switch httpResponse.statusCode {
+                case 201:
+                    if let jsonResponse = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+                       let success = jsonResponse["success"] as? Bool, success {
+                        let userId = jsonResponse["user_id"] as? Int ?? 0
                         completion(.success("User registered with ID: \(userId)"))
-                    }
-                } else if let message = jsonResponse?["message"] as? String, let fails = jsonResponse?["fails"] as? [String: [String]] {
-                    if let emailErrors = fails["email"] {
-                        print("Email validation error: \(emailErrors.joined(separator: ", "))")
-                        completion(.failure(.serverError("Email validation error: \(emailErrors.joined(separator: ", "))")))
                     } else {
-                        completion(.failure(.serverError(message)))
+                        completion(.failure(.serverError("Unexpected response format.", nil)))
                     }
+                case 409:
+                    let errorMessage = self.parseErrorMessage(from: data) ?? "User with this phone or email already exists"
+                    completion(.failure(.serverError(errorMessage, httpResponse)))
+                case 422:
+                    let validationMessage = self.parseValidationErrors(from: data) ?? "Validation error"
+                    completion(.failure(.serverError(validationMessage, httpResponse)))
+                default:
+                    let generalMessage = self.parseErrorMessage(from: data) ?? "Unexpected error"
+                    completion(.failure(.serverError("Status code \(httpResponse.statusCode): \(generalMessage)", httpResponse)))
                 }
-            } catch {
-                print("Decoding error: \(error)")
-                completion(.failure(.decodingError))
             }
         }.resume()
     }
